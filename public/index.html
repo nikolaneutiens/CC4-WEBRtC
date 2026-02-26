@@ -1,11 +1,55 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WEBRTC</title>
+  <title>Playing with the light</title>
 </head>
+
 <body>
-  
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+
+    const $msgForm = document.getElementById('msgForm');
+    const $msgInput = document.getElementById('msgInput');
+    const $nameForm = document.getElementById('nameForm');
+    const $nameInput = document.getElementById('nameInput');
+
+    let socket; // will be assigned a value later
+
+    const handleSubmit = e => {
+      e.preventDefault(); // Prevent the default form submission behavior refreshing the page
+      if (socket.connected) {
+        socket.emit(`message`, $msgInput.value);
+      }
+      $msgInput.value = ``;
+    };
+
+    const handleSubmitName = e => {
+      e.preventDefault();
+      socket.emit('name', $nameInput.value);
+    };
+
+    const init = () => {
+      socket = io.connect(`/`);
+      socket.on(`connect`, () => {
+        console.log(`Connected: ${socket.id}`);
+      });
+
+      $nameForm.addEventListener('submit', e => handleSubmitName(e));
+      $msgForm.addEventListener(`submit`, e => handleSubmit(e));
+
+      socket.on('message', (sender, message) => {
+        console.log(`<${sender.name}> ${message}`);
+      });
+    };
+
+    init();
+
+
+  </script>
 </body>
+
 </html>
