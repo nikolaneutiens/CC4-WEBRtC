@@ -45,7 +45,60 @@ There is also a reset gyro button if you feel your hand has to do inhumane movem
 npm init -y
 npm install express
 npm install socket.io
+npm install simple-peer
 ```
+We'll be using simple-peer to make P2P easier to read and code since it makes multiple blocks of code obsolute.
 
-Installed dependencies for setting up the server and 
+Starting off we want to make the connection possible using a QR-Code. Luckily our teacher @ Devine has an exercise that demonstrates how this works:
+
+Server.js
+``` js
+const express = require('express')
+const app = express()
+const http = require('http');
+const server = http.createServer(app);
+const { Server } = require("socket.io");
+const os = require('os');
+const io = new Server(server);
+const port = process.env.PORT || 80;
+
+const clients = {};
+io.on('connection', socket => {
+  clients[socket.id] = { id: socket.id };
+  console.log('Socket connected', socket.id);
+
+  clients[socket.id].x = 0;
+  clients[socket.id].y = 0;
+
+  socket.on('update', (targetSocketId, data) => {
+    if (!clients[targetSocketId]) {
+      return;
+    }
+    clients[socket.id].x = data.x;
+    clients[socket.id].y = data.y;
+    io.to(targetSocketId).emit('update', data);
+  });
+
+  socket.on('disconnect', () => {
+    delete clients[socket.id];
+  });
+
+});
+
+app.use(express.static('public'));
+
+server.listen(port, () => {
+  const networkInterfaces = os.networkInterfaces();
+  for (const interfaceName in networkInterfaces) {
+    for (const iface of networkInterfaces[interfaceName]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        console.log(`http://${iface.address}`);
+      }
+    }
+  }
+  console.log(`App listening on port ${port}!`);
+});
+```
+index.html
+```html
 

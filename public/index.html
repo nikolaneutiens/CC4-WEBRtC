@@ -4,51 +4,58 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Playing with the light</title>
+  <title>Laptop P2P Button Logger</title>
 </head>
 
 <body>
+  <h2>Laptop</h2>
+  <a id="url" href=""></a>
+  <div id="qr"></div>
 
   <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+
   <script>
+    const $url = document.getElementById('url');
+    const socket = io();
+    let peer;
 
-    const $msgForm = document.getElementById('msgForm');
-    const $msgInput = document.getElementById('msgInput');
-    const $nameForm = document.getElementById('nameForm');
-    const $nameInput = document.getElementById('nameInput');
+    socket.on('connect', () => {
+      console.log('Connected to server:', socket.id);
 
-    let socket; // will be assigned a value later
+      // Generate QR code for phone
+      const mobileUrl = `${new URL(`/mobile.html?id=${socket.id}`, window.location)}`;
+      $url.textContent = mobileUrl;
+      $url.href = mobileUrl;
 
-    const handleSubmit = e => {
-      e.preventDefault(); // Prevent the default form submission behavior refreshing the page
-      if (socket.connected) {
-        socket.emit(`message`, $msgInput.value);
-      }
-      $msgInput.value = ``;
-    };
+      const qr = qrcode(4, 'L');
+      qr.addData(mobileUrl);
+      qr.make();
+      document.getElementById('qr').innerHTML = qr.createImgTag(4);
 
-    const handleSubmitName = e => {
-      e.preventDefault();
-      socket.emit('name', $nameInput.value);
-    };
+      // Wait until a phone connects before creating initiator peer
+      socket.on('phone-ready', phoneId => {
+        console.log('Phone ready:', phoneId);
+        peer = new SimplePeer({ initiator: true, trickle: false });
 
-    const init = () => {
-      socket = io.connect(`/`);
-      socket.on(`connect`, () => {
-        console.log(`Connected: ${socket.id}`);
+        // Send signaling data to phone
+        peer.on('signal', data => socket.emit('signal', phoneId, data));
+
+        // Receive messages from phone
+        peer.on('data', data => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === 'buttonClick') {
+            console.log('Phone button clicked!', msg);
+          }
+        });
+
+        // Handle signaling from phone
+        socket.on('signal', ({ signal, from }) => {
+          if (from === phoneId) peer.signal(signal);
+        });
       });
-
-      $nameForm.addEventListener('submit', e => handleSubmitName(e));
-      $msgForm.addEventListener(`submit`, e => handleSubmit(e));
-
-      socket.on('message', (sender, message) => {
-        console.log(`<${sender.name}> ${message}`);
-      });
-    };
-
-    init();
-
-
+    });
   </script>
 </body>
 

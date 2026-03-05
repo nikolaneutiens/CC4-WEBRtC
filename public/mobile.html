@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Phone P2P Button</title>
+</head>
+
+<body>
+  <h2>Phone</h2>
+  <button id="sendBtn">Click Me</button>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
+
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const laptopId = urlParams.get('id');
+    const socket = io();
+    let peer;
+
+    socket.on('connect', () => {
+      console.log('Phone connected, Socket ID:', socket.id);
+
+      // Let laptop know this phone is ready
+      socket.emit('phone-ready', laptopId);
+
+      // Create non-initiator peer
+      peer = new SimplePeer({ initiator: false, trickle: false });
+
+      peer.on('signal', data => {
+        socket.emit('signal', laptopId, data);
+      });
+
+      socket.on('signal', ({ signal }) => {
+        peer.signal(signal);
+      });
+
+      peer.on('connect', () => {
+        console.log('P2P connected to laptop');
+        document.getElementById('sendBtn').addEventListener('click', () => {
+          peer.send(JSON.stringify({ type: 'buttonClick' }));
+          console.log('Sent buttonClick to laptop');
+        });
+      });
+
+      peer.on('error', err => console.error('Peer error:', err));
+    });
+  </script>
+</body>
+
+</html>
