@@ -20,6 +20,7 @@
   "homepage": "https://github.com/nikolaneutiens/CC4-WEBRtC#readme",
   "dependencies": {
     "express": "^5.2.1",
+    "simple-peer": "^9.11.1",
     "socket.io": "^4.8.3"
   }
 }
