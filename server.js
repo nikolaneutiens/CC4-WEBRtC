@@ -19,11 +19,6 @@ io.on('connection', socket => {
     if (target) target.emit('signal', { signal, from: socket.id });
   });
 
-  // Phone readiness
-  socket.on('phone-ready', laptopId => {
-    io.to(laptopId).emit('phone-ready', socket.id);
-  });
-
   socket.on('disconnect', () => {
     console.log('Socket disconnected:', socket.id);
   });

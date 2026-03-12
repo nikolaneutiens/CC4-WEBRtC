@@ -34,26 +34,38 @@
       qr.make();
       document.getElementById('qr').innerHTML = qr.createImgTag(4);
 
-      // Wait until a phone connects before creating initiator peer
-      socket.on('phone-ready', phoneId => {
-        console.log('Phone ready:', phoneId);
-        peer = new SimplePeer({ initiator: true, trickle: false });
+      // Create non-initiator peer - waits for phone to start the handshake
+      let phoneId = null;
+      peer = new SimplePeer({
+        initiator: false,
+        trickle: false,
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
+          ]
+        }
+      });
 
-        // Send signaling data to phone
-        peer.on('signal', data => socket.emit('signal', phoneId, data));
+      // Registered ONCE - sends answer back to phone
+      peer.on('signal', data => {
+        if (phoneId) socket.emit('signal', phoneId, data);
+      });
 
-        // Receive messages from phone
-        peer.on('data', data => {
-          const msg = JSON.parse(data.toString());
-          if (msg.type === 'buttonClick') {
-            console.log('Phone button clicked!', msg);
-          }
-        });
+      // Receive messages from phone
+      peer.on('data', data => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'buttonClick') {
+          console.log('Phone button clicked!', msg);
+        }
+      });
 
-        // Handle signaling from phone
-        socket.on('signal', ({ signal, from }) => {
-          if (from === phoneId) peer.signal(signal);
-        });
+      peer.on('error', err => console.error('Peer error:', err));
+
+      // Handle incoming offer from the phone
+      socket.on('signal', ({ signal, from }) => {
+        phoneId = from;
+        peer.signal(signal);
       });
     });
   </script>

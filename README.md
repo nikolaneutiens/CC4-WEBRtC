@@ -781,3 +781,9 @@ socket.on('connect', () => {
 ```
 
 Now when I connect my phone to my pc and click the button the event gets logged. WOOHOO!! Even when the server gets cut out, the connection between laptop and phone still stands. Refreshing ofcourse loses the connection. 
+
+### Week 2
+
+So the problem now is that my teacher said I'm doing a step too much in establishing the connection between phone and computer, now trying to fix it but after tweaking with it for a bit the console.log that happens after the button click doesn't work anymore.
+
+Unhandled Promise Rejection: Error: cannot signal after peer is destroyed
