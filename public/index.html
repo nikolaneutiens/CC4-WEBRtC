@@ -11,6 +11,17 @@
   <h2>Laptop</h2>
   <a id="url" href=""></a>
   <div id="qr"></div>
+  <div id="cursor" style="
+    position: fixed;
+    width: 20px;
+    height: 20px;
+    background: red;
+    border-radius: 50%;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    left: 50%;
+    top: 50%;
+  "></div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
@@ -36,16 +47,7 @@
 
       // Create non-initiator peer - waits for phone to start the handshake
       let phoneId = null;
-      peer = new SimplePeer({
-        initiator: false,
-        trickle: false,
-        config: {
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-          ]
-        }
-      });
+      peer = new SimplePeer({ initiator: false, trickle: false });
 
       // Registered ONCE - sends answer back to phone
       peer.on('signal', data => {
@@ -53,10 +55,34 @@
       });
 
       // Receive messages from phone
+      const cursor = document.getElementById('cursor');
+      let cursorX = window.innerWidth / 2;
+      let cursorY = window.innerHeight / 2;
+      let lastAlpha = null;
+
       peer.on('data', data => {
         const msg = JSON.parse(data.toString());
-        if (msg.type === 'buttonClick') {
-          console.log('Phone button clicked!', msg);
+        if (msg.type === 'gyro') {
+          // Calculate alpha delta to drift incrementally left/right
+          if (lastAlpha !== null) {
+            let alphaDelta = msg.alpha - lastAlpha;
+            // Handle compass wrap-around (e.g. 359 -> 1)
+            if (alphaDelta > 180) alphaDelta -= 360;
+            if (alphaDelta < -180) alphaDelta += 360;
+            cursorX -= alphaDelta * 20;
+          }
+          lastAlpha = msg.alpha;
+
+          // beta ranges roughly from -90 (tilted up) to 90 (tilted down)
+          // Map it directly to screen height so position is absolute like a Wii remote
+          cursorY = (90 - msg.beta) / 180 * window.innerHeight * (window.innerHeight / 300);
+          // Clamp to screen bounds
+          cursorX = Math.max(0, Math.min(window.innerWidth, cursorX));
+          cursorY = Math.max(0, Math.min(window.innerHeight, cursorY));
+          cursor.style.left = cursorX + 'px';
+          cursor.style.top = cursorY + 'px';
+        } else if (msg.type === 'buttonClick') {
+          document.body.style.backgroundColor = `hsl(${Math.random() * 360}, 70%, 80%)`;
         }
       });
 

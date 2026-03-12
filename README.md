@@ -787,3 +787,7 @@ Now when I connect my phone to my pc and click the button the event gets logged.
 So the problem now is that my teacher said I'm doing a step too much in establishing the connection between phone and computer, now trying to fix it but after tweaking with it for a bit the console.log that happens after the button click doesn't work anymore.
 
 Unhandled Promise Rejection: Error: cannot signal after peer is destroyed
+
+After some troubleshooting I found that I was on a WIFI network that blocks p2p connections, making it an invisible enemy while bashing my head against the wall.
+
+Now we're trying to implement the gyro features, the big issue right now is that gyro functionality only works after clicking a button to grant permissions and a HTTPS connection. The button to grant permissions works but now the issue establishing the HTTPS server since I'm currently using a HTTP connection which will never work.

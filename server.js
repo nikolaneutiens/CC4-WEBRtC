@@ -1,10 +1,14 @@
 const express = require('express');
 const app = express();
-const http = require('http');
-const server = http.createServer(app);
+const https = require('https');
+const fs = require('fs');
 const { Server } = require("socket.io");
 const os = require('os');
 
+const server = https.createServer({
+  key: fs.readFileSync('./localhost.key'),
+  cert: fs.readFileSync('./localhost.crt')
+}, app);
 const io = new Server(server);
 const port = process.env.PORT || 3000;
 
@@ -30,7 +34,7 @@ server.listen(port, () => {
   for (const name in interfaces) {
     for (const iface of interfaces[name]) {
       if (iface.family === 'IPv4' && !iface.internal) {
-        console.log(`http://${iface.address}:${port}`);
+        console.log(`https://${iface.address}:${port}`);
       }
     }
   }
