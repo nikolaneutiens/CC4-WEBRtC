@@ -470,7 +470,7 @@ npm install simple-peer
 The window.onload() function seems far stretched so I removed it. The error is now gone but now no data is being transferred. 
 
 ---
-[Okay so nothing on the laptop side gets logged]
+> [Okay so nothing on the laptop side gets logged]
 
 "Why nothing logs,
 peer.targetSocketId is not set correctly before sending signals.
