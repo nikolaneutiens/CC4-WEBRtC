@@ -5,23 +5,27 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Laptop P2P Button Logger</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      color: white;
+    }
+
+    #overlay {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      transition: background 0.05s;
+    }
+  </style>
 </head>
 
 <body>
   <h2>Laptop</h2>
   <a id="url" href=""></a>
   <div id="qr"></div>
-  <div id="cursor" style="
-    position: fixed;
-    width: 20px;
-    height: 20px;
-    background: red;
-    border-radius: 50%;
-    pointer-events: none;
-    transform: translate(-50%, -50%);
-    left: 50%;
-    top: 50%;
-  "></div>
+  <div id="overlay"></div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
@@ -55,10 +59,16 @@
       });
 
       // Receive messages from phone
-      const cursor = document.getElementById('cursor');
+      const overlay = document.getElementById('overlay');
       let cursorX = window.innerWidth / 2;
       let cursorY = window.innerHeight / 2;
       let lastAlpha = null;
+
+      const moveFlashlight = () => {
+        document.body.style.background = '#222';
+        overlay.style.background = `radial-gradient(circle 250px at ${cursorX}px ${cursorY}px, transparent 0%, transparent 40%, rgba(0,0,0,0.97) 100%)`;
+      };
+      moveFlashlight();
 
       peer.on('data', data => {
         const msg = JSON.parse(data.toString());
@@ -75,12 +85,13 @@
 
           // beta ranges roughly from -90 (tilted up) to 90 (tilted down)
           // Map it directly to screen height so position is absolute like a Wii remote
-          cursorY = (90 - msg.beta) / 180 * window.innerHeight * (window.innerHeight / 300);
+          // beta=0 (flat) = 3/4 down the screen
+          const sensitivity = 3;
+          cursorY = (window.innerHeight * 0.75) - msg.beta * (window.innerHeight / 180) * sensitivity;
           // Clamp to screen bounds
           cursorX = Math.max(0, Math.min(window.innerWidth, cursorX));
           cursorY = Math.max(0, Math.min(window.innerHeight, cursorY));
-          cursor.style.left = cursorX + 'px';
-          cursor.style.top = cursorY + 'px';
+          moveFlashlight();
         } else if (msg.type === 'buttonClick') {
           document.body.style.backgroundColor = `hsl(${Math.random() * 360}, 70%, 80%)`;
         }
