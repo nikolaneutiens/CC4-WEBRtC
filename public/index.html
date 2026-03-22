@@ -22,7 +22,7 @@
       align-items: center;
       justify-content: center;
       text-align: center;
-      background: #0b0d12;
+      background: #0b0d12 url('/assets/img/background.png') center center / cover no-repeat;
       z-index: 5;
     }
 
@@ -248,6 +248,7 @@
     let lastBatterySentAt = 0;
     let lastBatterySentLevel = -1;
     let jumpscareTimeoutId = null;
+    let currentGameSessionId = 0;
 
     const resizeCanvas = () => {
       canvas.width = window.innerWidth;
@@ -291,9 +292,13 @@
     };
 
     const setDeathState = survivedSeconds => {
+      if (!gameRunning || !peer || !peer.connected) {
+        return;
+      }
       if (isDead) {
         return;
       }
+      const deathSessionId = currentGameSessionId;
       gameRunning = false;
       isDead = true;
       if (frameId !== null) {
@@ -312,6 +317,9 @@
         clearTimeout(jumpscareTimeoutId);
       }
       jumpscareTimeoutId = setTimeout(() => {
+        if (deathSessionId !== currentGameSessionId) {
+          return;
+        }
         jumpscareEl.style.display = 'none';
         deathScreenEl.style.display = 'flex';
       }, 1200);
@@ -410,8 +418,8 @@
       ctx.drawImage(backgroundImage, offsetX, offsetY, drawWidth, drawHeight);
     };
 
-    const gameLoop = nowMs => {
-      if (!gameRunning) {
+    const gameLoop = (nowMs, sessionId) => {
+      if (!gameRunning || sessionId !== currentGameSessionId) {
         return;
       }
 
@@ -507,7 +515,7 @@
 
       updateFlashlight(nowMs);
       sendBatteryLevel(nowMs);
-      frameId = requestAnimationFrame(gameLoop);
+      frameId = requestAnimationFrame(nextMs => gameLoop(nextMs, sessionId));
     };
 
     const startGame = () => {
@@ -516,6 +524,8 @@
       }
 
       setActiveState();
+      currentGameSessionId += 1;
+      const sessionId = currentGameSessionId;
       isDead = false;
       monsters = [];
       gameRunning = true;
@@ -528,7 +538,7 @@
       timerEl.textContent = '0.0';
       updateFlashlight(gameStartMs);
       sendBatteryLevel(gameStartMs, true);
-      frameId = requestAnimationFrame(gameLoop);
+      frameId = requestAnimationFrame(nextMs => gameLoop(nextMs, sessionId));
     };
 
     const resetToWaiting = () => {
@@ -543,6 +553,7 @@
         frameId = null;
       }
       gameRunning = false;
+      currentGameSessionId += 1;
       flashlightRadius = FLASHLIGHT_MAX_RADIUS;
       lastBatterySentAt = 0;
       lastBatterySentLevel = -1;
