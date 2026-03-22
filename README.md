@@ -46,9 +46,9 @@ npm init -y
 npm install express
 npm install socket.io
 ```
-We'll be using simple-peer to make P2P easier to read and code since it makes multiple blocks of code obsolute.
+I'll be using simple-peer to make P2P easier to read and code since it makes multiple blocks of code obsolute.
 
-Starting off we want to make the connection possible using a QR-Code. Luckily our teacher @ Devine has an exercise that demonstrates how this works:
+Starting off I wanted to make the connection possible using a QR-Code. Luckily my teacher @ Devine has an exercise that demonstrates how this works:
 
 Server.js
 ``` js
@@ -265,12 +265,12 @@ And the mobile.html
 </html>
 ```
 
-Now the challenge is to establish a peer 2 peer connection, this code makes the connection work via the server but when the server is down the connection gets lost. This is because we're still working with socket.io data transfer and not peer data transfer.
+Now the challenge is to establish a peer 2 peer connection, this code makes the connection work via the server but when the server is down the connection gets lost. This is because I'm still working with socket.io data transfer and not peer data transfer.
 
 ---
 !! I use ChatGPT to simply make the connection work via EasyPeer instead of socket data transfer to make it work without the server: 
 
-[(Given the code of my index.html and mobile.html) we establish a connection via an express server and using data transfer using socket.io, but i want to only use websockets to initialise the connection via websockets so that when the server goes down the connection still stands. Use EasyPeer to get peer 2 peer data transfer]
+[(Given the code of my index.html and mobile.html) I establish a connection via an express server and using data transfer using socket.io, but i want to only use websockets to initialise the connection via websockets so that when the server goes down the connection still stands. Use EasyPeer to get peer 2 peer data transfer]
 
 
 ```html
@@ -443,7 +443,7 @@ socket.on("connect", () => {
 
 ---
 
-Starting up the server works via using the terminal command node server.js. Now we can test the code and quit the server to see the connection still stands.
+Starting up the server works via using the terminal command node server.js. Now I can test the code and quit the server to see the connection still stands.
 
 Error message 
 
@@ -791,6 +791,287 @@ Unhandled Promise Rejection: Error: cannot signal after peer is destroyed
 After some troubleshooting I found that I was on a WIFI network that blocks p2p connections, making it an invisible enemy while bashing my head against the wall.
 
 
-Now we're trying to implement the gyro features, the big issue right now is that gyro functionality only works after clicking a button to grant permissions and a HTTPS connection. The button to grant permissions works but now the issue establishing the HTTPS server since I'm currently using a HTTP connection which will never work.
+Now I'm trying to implement the gyro features, the big issue right now is that gyro functionality only works after clicking a button to grant permissions and a HTTPS connection. The button to grant permissions works but now the issue establishing the HTTPS server since I'm currently using a HTTP connection which will never work.
 
 The HTTPS issue has been fixed. 
+
+### Week 3
+
+Today was honestly one of those days where everything kept getting better in layers: first connection stability, then gameplay systems, then polish, and then bug hunting edge-cases that only happen when real people actually disconnect/reconnect in weird order.
+
+I now have a full playable loop where the phone is the controller and the laptop is the game renderer. The player survives as long as possible by shining a flashlight using gyro movement. Monsters spawn from edges, move inward, grow over time, and get damaged by the light cone. When they reach center, jumpscare + death state triggers, and restart is possible from the phone.
+
+#### What happened and what I improved
+
+- Simplified and stabilized WebRTC signaling flow.
+- Kept HTTPS server setup for iOS motion permissions.
+- Added disconnect awareness so paired peer gets notified.
+- Added in-game mechanics: spawns, scaling pressure, light damage, timer, death state.
+- Added visuals: sprite monsters + background image + jumpscare image.
+- Added audio/haptics behavior on both laptop and phone.
+- Synced battery HUD on phone from flashlight radius on laptop.
+- Added `GIVE UP` flow during gameplay (not only after death).
+- Fixed a subtle stale-callback bug where jumpscare sound could play after disconnect/new join.
+
+#### Current server signaling + disconnect handling
+
+```js
+const express = require('express');
+const app = express();
+const https = require('https');
+const fs = require('fs');
+const { Server } = require("socket.io");
+const os = require('os');
+
+const server = https.createServer({
+  key: fs.readFileSync('./localhost.key'),
+  cert: fs.readFileSync('./localhost.crt')
+}, app);
+const io = new Server(server);
+const port = process.env.PORT || 3000;
+const socketPeerMap = new Map();
+
+app.use(express.static('public'));
+
+io.on('connection', socket => {
+  console.log('Socket connected:', socket.id);
+
+  socket.on('signal', (targetId, signal) => {
+    const target = io.sockets.sockets.get(targetId);
+    if (target) {
+      target.emit('signal', { signal, from: socket.id });
+      socketPeerMap.set(socket.id, targetId);
+      socketPeerMap.set(targetId, socket.id);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    const peerId = socketPeerMap.get(socket.id);
+    if (peerId) {
+      io.to(peerId).emit('peer-disconnected', { id: socket.id });
+      if (socketPeerMap.get(peerId) === socket.id) {
+        socketPeerMap.delete(peerId);
+      }
+      socketPeerMap.delete(socket.id);
+    }
+    console.log('Socket disconnected:', socket.id);
+  });
+});
+```
+
+#### Core laptop game state (new session-safe version)
+
+This was a big one. The stale reconnect issue got solved with `currentGameSessionId` so old animation frames/timeouts cannot leak into a new session.
+
+```js
+let monsters = [];
+let gameRunning = false;
+let isDead = false;
+let gameStartMs = 0;
+let lastFrameMs = 0;
+let lastSpawnMs = 0;
+let frameId = null;
+let flashlightRadius = FLASHLIGHT_MAX_RADIUS;
+let lastBatterySentAt = 0;
+let lastBatterySentLevel = -1;
+let jumpscareTimeoutId = null;
+let currentGameSessionId = 0;
+
+const setDeathState = survivedSeconds => {
+  if (!gameRunning || !peer || !peer.connected) {
+    return;
+  }
+  if (isDead) {
+    return;
+  }
+  const deathSessionId = currentGameSessionId;
+  gameRunning = false;
+  isDead = true;
+
+  playJumpscareSound();
+
+  if (jumpscareTimeoutId !== null) {
+    clearTimeout(jumpscareTimeoutId);
+  }
+  jumpscareTimeoutId = setTimeout(() => {
+    if (deathSessionId !== currentGameSessionId) {
+      return;
+    }
+    jumpscareEl.style.display = 'none';
+    deathScreenEl.style.display = 'flex';
+  }, 1200);
+};
+
+const gameLoop = (nowMs, sessionId) => {
+  if (!gameRunning || sessionId !== currentGameSessionId) {
+    return;
+  }
+
+  // update timers, monsters, rendering...
+
+  frameId = requestAnimationFrame(nextMs => gameLoop(nextMs, sessionId));
+};
+
+const startGame = () => {
+  if (gameRunning) {
+    return;
+  }
+
+  currentGameSessionId += 1;
+  const sessionId = currentGameSessionId;
+  gameRunning = true;
+  gameStartMs = performance.now();
+  lastFrameMs = gameStartMs;
+  lastSpawnMs = gameStartMs;
+  frameId = requestAnimationFrame(nextMs => gameLoop(nextMs, sessionId));
+};
+
+const resetToWaiting = () => {
+  if (frameId !== null) {
+    cancelAnimationFrame(frameId);
+    frameId = null;
+  }
+  gameRunning = false;
+  currentGameSessionId += 1;
+};
+```
+
+#### Gameplay rendering and visual direction
+
+The game and waiting screen now share the same visual atmosphere with `background.png`, and monsters animate from sprite-sheet frames.
+
+```js
+const MONSTER_SPRITE_PATH = '/assets/img/spritesheet/monster__sheet.png';
+const BACKGROUND_IMAGE_PATH = '/assets/img/background.png';
+const MONSTER_SPRITE_COLUMNS = 8;
+const MONSTER_SPRITE_ROWS = 8;
+const MONSTER_SPRITE_FRAME_COUNT = 60;
+const MONSTER_SPRITE_FPS = 30;
+
+const backgroundImage = new Image();
+let backgroundImageReady = false;
+backgroundImage.onload = () => {
+  backgroundImageReady = true;
+};
+backgroundImage.src = BACKGROUND_IMAGE_PATH;
+
+const drawGameBackground = () => {
+  if (!backgroundImageReady) {
+    ctx.fillStyle = '#88929a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    return;
+  }
+
+  const imageAspect = backgroundImage.width / backgroundImage.height;
+  const canvasAspect = canvas.width / canvas.height;
+
+  let drawWidth = canvas.width;
+  let drawHeight = canvas.height;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  if (imageAspect > canvasAspect) {
+    drawHeight = canvas.height;
+    drawWidth = drawHeight * imageAspect;
+    offsetX = (canvas.width - drawWidth) / 2;
+  } else {
+    drawWidth = canvas.width;
+    drawHeight = drawWidth / imageAspect;
+    offsetY = (canvas.height - drawHeight) / 2;
+  }
+
+  ctx.drawImage(backgroundImage, offsetX, offsetY, drawWidth, drawHeight);
+};
+```
+
+And on the start screen:
+
+```css
+#waiting-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  background: #0b0d12 url('/assets/img/background.png') center center / cover no-repeat;
+  z-index: 5;
+}
+```
+
+#### Mobile controller status (battery, haptics, give up, wake lock)
+
+Phone side now feels way more complete and readable during play.
+
+```js
+const startBtn = document.getElementById('startBtn');
+const quitBtn = document.getElementById('quitBtn');
+const batteryFill = document.getElementById('batteryFill');
+const batteryValue = document.getElementById('batteryValue');
+let canRestart = false;
+let isPlaying = false;
+let wakeLockSentinel = null;
+
+const setBatteryLevel = level => {
+  const clamped = Math.max(0, Math.min(100, level));
+  batteryFill.style.width = `${clamped}%`;
+  batteryValue.textContent = `${clamped}%`;
+};
+
+const startGyroStreaming = () => {
+  if (gyroStarted) {
+    return;
+  }
+  gyroStarted = true;
+  isPlaying = true;
+  acquireWakeLock();
+  quitBtn.style.display = 'block';
+
+  if (peer && peer.connected) {
+    peer.send(JSON.stringify({ type: 'startGame' }));
+  }
+
+  startBtn.textContent = 'SURVIVING...';
+  startBtn.disabled = true;
+};
+
+peer.on('data', data => {
+  const msg = JSON.parse(data.toString());
+
+  if (msg.type === 'gameOver') {
+    canRestart = true;
+    isPlaying = false;
+    releaseWakeLock();
+    startBtn.disabled = false;
+    startBtn.textContent = 'RESTART';
+    quitBtn.style.display = 'block';
+    return;
+  }
+
+  if (msg.type === 'battery') {
+    setBatteryLevel(msg.level);
+  }
+});
+```
+
+#### Dev day notes (the real story)
+
+The sneakiest issue today was this: after a disconnect, if someone new joined quickly, old callbacks could still finish and accidentally trigger jumpscare state/audio from a dead session. It felt random at first. The fix was not just one guard, but a layered approach:
+
+1. Only allow death handling if game is actually running and peer is connected.
+2. Add session tokening (`currentGameSessionId`) to invalidate old animation loops.
+3. Guard delayed jumpscare timeout with that same session id.
+
+After that, reconnect behavior became much more predictable.
+
+#### Commits from today
+
+```bash
+d253238 2026-03-22 added assets and QOL updates
+5bb8a75 2026-03-22 basic gamerules and mechanics
+2e5e820 2026-03-22 Merge pull request #2 from nikolaneutiens/feature/gyro
+946b26a 2026-03-22 disconnection capability
+```
+
+So overall: huge step forward today. I moved from mostly-technical prototype behavior into a cohesive playable experience with cleaner reconnect behavior and much stronger presentation.

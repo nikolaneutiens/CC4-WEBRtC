@@ -4,14 +4,110 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Phone P2P Button</title>
+  <title>Phone Controller</title>
+  <style>
+    body {
+      margin: 0;
+      width: 100vw;
+      height: 100vh;
+      background: #000;
+      overflow: hidden;
+      font-family: Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #batteryHud {
+      padding: 14px 16px 10px;
+      box-sizing: border-box;
+      z-index: 2;
+      border-bottom: 2px solid #fff;
+      background: #000;
+    }
+
+    #batteryLabel {
+      color: #fff;
+      font-size: 0.95rem;
+      margin-bottom: 6px;
+      letter-spacing: 0.04em;
+    }
+
+    #deviceStatus {
+      color: #bbb;
+      font-size: 0.8rem;
+      margin-bottom: 8px;
+      letter-spacing: 0.02em;
+    }
+
+    #batteryTrack {
+      width: 100%;
+      height: 24px;
+      border: 2px solid #fff;
+      overflow: hidden;
+      box-sizing: border-box;
+      background: #000;
+    }
+
+    #batteryFill {
+      width: 100%;
+      height: 100%;
+      background: repeating-linear-gradient(90deg,
+          #fff 0px,
+          #fff 14px,
+          #000 14px,
+          #000 16px);
+      transition: width 0.1s linear;
+    }
+
+    #controls {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #startBtn {
+      width: 100%;
+      flex: 1;
+      border: 3px solid #fff;
+      background: #000;
+      color: #fff;
+      font-size: 2rem;
+      font-weight: bold;
+      letter-spacing: 0.08em;
+      box-sizing: border-box;
+    }
+
+    #startBtn:disabled {
+      opacity: 0.7;
+    }
+
+    #quitBtn {
+      width: 100%;
+      height: 84px;
+      border: 3px solid #fff;
+      background: #000;
+      color: #fff;
+      font-size: 1.4rem;
+      font-weight: bold;
+      letter-spacing: 0.06em;
+      display: none;
+      box-sizing: border-box;
+    }
+  </style>
 </head>
 
 <body>
-  <h2>Phone</h2>
-  <button id="startBtn">Start Gyro</button>
-  <button id="sendBtn" disabled>Click Me</button>
-  <p id="status">Waiting for P2P connection...</p>
+  <div id="batteryHud">
+    <div id="batteryLabel">Flashlight Battery: <span id="batteryValue">100%</span></div>
+    <div id="deviceStatus"></div>
+    <div id="batteryTrack">
+      <div id="batteryFill"></div>
+    </div>
+  </div>
+  <div id="controls">
+    <button id="quitBtn">GIVE UP</button>
+    <button id="startBtn" disabled>START</button>
+  </div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
@@ -19,8 +115,133 @@
   <script>
     const urlParams = new URLSearchParams(window.location.search);
     const laptopId = urlParams.get('id');
+    const JUMPSCARE_SOUND_PATH = '/assets/sound/jumpscare.mp3';
     const socket = io();
+    const startBtn = document.getElementById('startBtn');
+    const quitBtn = document.getElementById('quitBtn');
+    const batteryFill = document.getElementById('batteryFill');
+    const batteryValue = document.getElementById('batteryValue');
+    const deviceStatus = document.getElementById('deviceStatus');
     let peer;
+    let gyroStarted = false;
+    let canRestart = false;
+    let isPlaying = false;
+    let wakeLockSentinel = null;
+    const supportsVibration = typeof navigator.vibrate === 'function';
+    const phoneJumpscareAudio = new Audio(JUMPSCARE_SOUND_PATH);
+    phoneJumpscareAudio.preload = 'auto';
+    phoneJumpscareAudio.volume = 1;
+    let phoneAudioUnlocked = false;
+
+    const unlockPhoneAudio = () => {
+      if (phoneAudioUnlocked) {
+        return;
+      }
+      phoneJumpscareAudio.muted = true;
+      phoneJumpscareAudio.play()
+        .then(() => {
+          phoneJumpscareAudio.pause();
+          phoneJumpscareAudio.currentTime = 0;
+          phoneJumpscareAudio.muted = false;
+          phoneAudioUnlocked = true;
+        })
+        .catch(() => {
+        });
+    };
+
+    const playPhoneJumpscareEffects = () => {
+      let vibrated = false;
+      if (supportsVibration) {
+        vibrated = navigator.vibrate([120, 80, 180, 80, 260]) === true;
+      }
+      if (!vibrated) {
+        document.body.animate(
+          [
+            { filter: 'brightness(1)' },
+            { filter: 'brightness(1.25)' },
+            { filter: 'brightness(1)' }
+          ],
+          { duration: 240 }
+        );
+      }
+      if (!phoneAudioUnlocked) {
+        unlockPhoneAudio();
+      }
+      phoneJumpscareAudio.currentTime = 0;
+      phoneJumpscareAudio.play().catch(() => {
+      });
+    };
+
+    const acquireWakeLock = async () => {
+      if (!('wakeLock' in navigator)) {
+        return;
+      }
+      try {
+        if (!wakeLockSentinel) {
+          wakeLockSentinel = await navigator.wakeLock.request('screen');
+          wakeLockSentinel.addEventListener('release', () => {
+            wakeLockSentinel = null;
+          });
+        }
+      } catch (err) {
+        console.error('Wake lock error:', err);
+      }
+    };
+
+    const releaseWakeLock = async () => {
+      if (wakeLockSentinel) {
+        try {
+          await wakeLockSentinel.release();
+        } catch (err) {
+          console.error('Wake lock release error:', err);
+        }
+        wakeLockSentinel = null;
+      }
+    };
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && isPlaying) {
+        acquireWakeLock();
+      }
+    });
+
+    const setBatteryLevel = level => {
+      const clamped = Math.max(0, Math.min(100, level));
+      batteryFill.style.width = `${clamped}%`;
+      batteryValue.textContent = `${clamped}%`;
+    };
+
+    deviceStatus.textContent = supportsVibration
+      ? 'Haptics: supported'
+      : 'Haptics: not supported on this browser';
+
+    const startGyroStreaming = () => {
+      if (gyroStarted) {
+        return;
+      }
+      gyroStarted = true;
+      isPlaying = true;
+      acquireWakeLock();
+      quitBtn.style.display = 'block';
+
+      if (peer && peer.connected) {
+        peer.send(JSON.stringify({ type: 'startGame' }));
+      }
+
+      startBtn.textContent = 'SURVIVING...';
+      startBtn.disabled = true;
+
+      window.addEventListener('deviceorientation', event => {
+        if (!peer || !peer.connected) {
+          return;
+        }
+        peer.send(JSON.stringify({
+          type: 'gyro',
+          beta: event.beta,
+          alpha: event.alpha
+        }));
+      });
+    };
 
     socket.on('connect', () => {
       console.log('Phone connected, Socket ID:', socket.id);
@@ -36,44 +257,79 @@
       });
 
       peer.on('connect', () => {
-        console.log('P2P connected to laptop');
-        document.getElementById('status').textContent = 'Connected! Tap Start Gyro.';
-        const btn = document.getElementById('sendBtn');
-        btn.disabled = false;
-        btn.addEventListener('click', () => {
-          peer.send(JSON.stringify({ type: 'buttonClick' }));
-          console.log('Sent buttonClick to laptop');
-        });
+        startBtn.disabled = false;
+      });
 
-        document.getElementById('startBtn').addEventListener('click', () => {
-          if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-            DeviceMotionEvent.requestPermission().then(permission => {
-              if (permission !== 'granted') {
-                alert('Gyro permission denied.');
-                return;
-              }
-              startGyro();
-            }).catch(err => console.error('Permission error:', err));
-          } else {
-            startGyro();
-          }
-        });
+      peer.on('data', data => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'gameOver') {
+          playPhoneJumpscareEffects();
+          canRestart = true;
+          isPlaying = false;
+          releaseWakeLock();
+          startBtn.disabled = false;
+          startBtn.textContent = 'RESTART';
+          quitBtn.style.display = 'block';
+          return;
+        }
 
-        const startGyro = () => {
-          document.getElementById('status').textContent = 'Gyro active!';
-          window.addEventListener('deviceorientation', e => {
-            if (peer && peer.connected) {
-              peer.send(JSON.stringify({
-                type: 'gyro',
-                beta: e.beta,  
-                alpha: e.alpha 
-              }));
-            }
-          });
-        };
+        if (msg.type === 'battery') {
+          setBatteryLevel(msg.level);
+        }
       });
 
       peer.on('error', err => console.error('Peer error:', err));
+    });
+
+    startBtn.addEventListener('click', () => {
+      unlockPhoneAudio();
+
+      if (!peer || !peer.connected) {
+        return;
+      }
+
+      if (canRestart) {
+        canRestart = false;
+        isPlaying = true;
+        acquireWakeLock();
+        startBtn.textContent = 'SURVIVING...';
+        startBtn.disabled = true;
+        quitBtn.style.display = 'block';
+        peer.send(JSON.stringify({ type: 'restartGame' }));
+        return;
+      }
+
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        DeviceMotionEvent.requestPermission()
+          .then(permission => {
+            if (permission !== 'granted') {
+              alert('Gyro permission denied.');
+              return;
+            }
+            startGyroStreaming();
+          })
+          .catch(err => console.error('Permission error:', err));
+      } else {
+        startGyroStreaming();
+      }
+    });
+
+    quitBtn.addEventListener('click', () => {
+      unlockPhoneAudio();
+
+      quitBtn.style.display = 'none';
+      startBtn.disabled = true;
+      startBtn.textContent = 'DISCONNECTED';
+      canRestart = false;
+      isPlaying = false;
+      releaseWakeLock();
+
+      if (peer && !peer.destroyed) {
+        peer.destroy();
+      }
+      if (socket && socket.connected) {
+        socket.disconnect();
+      }
     });
   </script>
 </body>
