@@ -4,14 +4,35 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Phone P2P Button</title>
+  <title>Phone Controller</title>
+  <style>
+    body {
+      margin: 0;
+      width: 100vw;
+      height: 100vh;
+      background: #000;
+      overflow: hidden;
+    }
+
+    #startBtn {
+      width: 100vw;
+      height: 100vh;
+      border: 3px solid #fff;
+      background: #000;
+      color: #fff;
+      font-size: 2rem;
+      font-weight: bold;
+      letter-spacing: 0.08em;
+    }
+
+    #startBtn:disabled {
+      opacity: 0.7;
+    }
+  </style>
 </head>
 
 <body>
-  <h2>Phone</h2>
-  <button id="startBtn">Start Gyro</button>
-  <button id="sendBtn" disabled>Click Me</button>
-  <p id="status">Waiting for P2P connection...</p>
+  <button id="startBtn" disabled>START</button>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
@@ -20,7 +41,35 @@
     const urlParams = new URLSearchParams(window.location.search);
     const laptopId = urlParams.get('id');
     const socket = io();
+    const startBtn = document.getElementById('startBtn');
     let peer;
+    let gyroStarted = false;
+    let canRestart = false;
+
+    const startGyroStreaming = () => {
+      if (gyroStarted) {
+        return;
+      }
+      gyroStarted = true;
+
+      if (peer && peer.connected) {
+        peer.send(JSON.stringify({ type: 'startGame' }));
+      }
+
+      startBtn.textContent = 'SURVIVING...';
+      startBtn.disabled = true;
+
+      window.addEventListener('deviceorientation', event => {
+        if (!peer || !peer.connected) {
+          return;
+        }
+        peer.send(JSON.stringify({
+          type: 'gyro',
+          beta: event.beta,
+          alpha: event.alpha
+        }));
+      });
+    };
 
     socket.on('connect', () => {
       console.log('Phone connected, Socket ID:', socket.id);
@@ -36,44 +85,47 @@
       });
 
       peer.on('connect', () => {
-        console.log('P2P connected to laptop');
-        document.getElementById('status').textContent = 'Connected! Tap Start Gyro.';
-        const btn = document.getElementById('sendBtn');
-        btn.disabled = false;
-        btn.addEventListener('click', () => {
-          peer.send(JSON.stringify({ type: 'buttonClick' }));
-          console.log('Sent buttonClick to laptop');
-        });
+        startBtn.disabled = false;
+      });
 
-        document.getElementById('startBtn').addEventListener('click', () => {
-          if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-            DeviceMotionEvent.requestPermission().then(permission => {
-              if (permission !== 'granted') {
-                alert('Gyro permission denied.');
-                return;
-              }
-              startGyro();
-            }).catch(err => console.error('Permission error:', err));
-          } else {
-            startGyro();
-          }
-        });
-
-        const startGyro = () => {
-          document.getElementById('status').textContent = 'Gyro active!';
-          window.addEventListener('deviceorientation', e => {
-            if (peer && peer.connected) {
-              peer.send(JSON.stringify({
-                type: 'gyro',
-                beta: e.beta,  
-                alpha: e.alpha 
-              }));
-            }
-          });
-        };
+      peer.on('data', data => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'gameOver') {
+          canRestart = true;
+          startBtn.disabled = false;
+          startBtn.textContent = 'RESTART';
+        }
       });
 
       peer.on('error', err => console.error('Peer error:', err));
+    });
+
+    startBtn.addEventListener('click', () => {
+      if (!peer || !peer.connected) {
+        return;
+      }
+
+      if (canRestart) {
+        canRestart = false;
+        startBtn.textContent = 'SURVIVING...';
+        startBtn.disabled = true;
+        peer.send(JSON.stringify({ type: 'restartGame' }));
+        return;
+      }
+
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        DeviceMotionEvent.requestPermission()
+          .then(permission => {
+            if (permission !== 'granted') {
+              alert('Gyro permission denied.');
+              return;
+            }
+            startGyroStreaming();
+          })
+          .catch(err => console.error('Permission error:', err));
+      } else {
+        startGyroStreaming();
+      }
     });
   </script>
 </body>

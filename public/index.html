@@ -4,28 +4,31 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Laptop P2P Button Logger</title>
+  <title>Survive With the Light</title>
   <style>
     body {
       margin: 0;
       overflow: hidden;
       background: #fff;
       color: #000;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
       font-family: Arial, sans-serif;
     }
 
     #waiting-screen {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
       text-align: center;
-      z-index: 1;
+      background: #fff;
+      z-index: 5;
     }
 
     #title {
       margin: 0 0 16px;
-      font-size: 2rem;
+      font-size: 2.2rem;
     }
 
     #url {
@@ -34,10 +37,49 @@
       color: inherit;
     }
 
+    #game-canvas {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      display: none;
+    }
+
+    #hud {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      color: #fff;
+      font-size: 1.2rem;
+      font-weight: bold;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+      z-index: 3;
+      display: none;
+    }
+
     #overlay {
       position: fixed;
       inset: 0;
       pointer-events: none;
+      z-index: 2;
+      display: none;
+    }
+
+    #death-screen {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      text-align: center;
+      color: #fff;
+      background: rgba(0, 0, 0, 0.72);
+      z-index: 4;
+    }
+
+    #death-screen h2 {
+      margin: 0 0 10px;
+      font-size: 2.2rem;
     }
   </style>
 </head>
@@ -48,7 +90,14 @@
     <a id="url" href=""></a>
     <div id="qr"></div>
   </div>
+
+  <canvas id="game-canvas"></canvas>
+  <div id="hud">Time Alive: <span id="timer">0.0</span>s</div>
   <div id="overlay"></div>
+  <div id="death-screen">
+    <h2>You Died</h2>
+    <p>Tap restart on your phone to try again.</p>
+  </div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
@@ -56,13 +105,253 @@
 
   <script>
     const $url = document.getElementById('url');
+    const waitingScreenEl = document.getElementById('waiting-screen');
+    const qrEl = document.getElementById('qr');
+    const canvas = document.getElementById('game-canvas');
+    const ctx = canvas.getContext('2d');
+    const overlayEl = document.getElementById('overlay');
+    const deathScreenEl = document.getElementById('death-screen');
+    const hudEl = document.getElementById('hud');
+    const timerEl = document.getElementById('timer');
+
     const socket = io();
     let peer;
+    let phoneId = null;
+
+    let cursorX = window.innerWidth / 2;
+    let cursorY = window.innerHeight * 0.75;
+    let lastAlpha = null;
+
+    let monsters = [];
+    let gameRunning = false;
+    let isDead = false;
+    let gameStartMs = 0;
+    let lastFrameMs = 0;
+    let lastSpawnMs = 0;
+    let frameId = null;
+    let flashlightRadius = 260;
+
+    const resizeCanvas = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      cursorX = Math.max(0, Math.min(canvas.width, cursorX));
+      cursorY = Math.max(0, Math.min(canvas.height, cursorY));
+    };
+
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    const setWaitingState = () => {
+      isDead = false;
+      waitingScreenEl.style.display = 'flex';
+      canvas.style.display = 'none';
+      overlayEl.style.display = 'none';
+      overlayEl.style.background = '';
+      hudEl.style.display = 'none';
+      deathScreenEl.style.display = 'none';
+      document.body.style.backgroundColor = '#fff';
+      document.body.style.color = '#000';
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    };
+
+    const setActiveState = () => {
+      waitingScreenEl.style.display = 'none';
+      canvas.style.display = 'block';
+      overlayEl.style.display = 'block';
+      hudEl.style.display = 'block';
+      deathScreenEl.style.display = 'none';
+      document.body.style.backgroundColor = '#111';
+      document.body.style.color = '#fff';
+    };
+
+    const setDeathState = () => {
+      gameRunning = false;
+      isDead = true;
+      if (frameId !== null) {
+        cancelAnimationFrame(frameId);
+        frameId = null;
+      }
+      overlayEl.style.display = 'none';
+      hudEl.style.display = 'none';
+      deathScreenEl.style.display = 'flex';
+      if (peer && peer.connected) {
+        peer.send(JSON.stringify({ type: 'gameOver' }));
+      }
+    };
+
+    const updateFlashlight = () => {
+      overlayEl.style.background = `radial-gradient(circle ${flashlightRadius}px at ${cursorX}px ${cursorY}px, transparent 0%, transparent 35%, rgba(0,0,0,0.97) 100%)`;
+    };
+
+    const spawnMonster = elapsedSec => {
+      const edge = Math.floor(Math.random() * 4);
+      let x;
+      let y;
+
+      if (edge === 0) {
+        x = Math.random() * canvas.width;
+        y = -35;
+      } else if (edge === 1) {
+        x = canvas.width + 35;
+        y = Math.random() * canvas.height;
+      } else if (edge === 2) {
+        x = Math.random() * canvas.width;
+        y = canvas.height + 35;
+      } else {
+        x = -35;
+        y = Math.random() * canvas.height;
+      }
+
+      monsters.push({
+        x,
+        y,
+        radius: 12,
+        health: 100,
+        speed: 24 + elapsedSec * 0.55,
+        growthRate: 2.5 + elapsedSec * 0.04
+      });
+    };
+
+    const gameLoop = nowMs => {
+      if (!gameRunning) {
+        return;
+      }
+
+      const dt = Math.min(0.05, (nowMs - lastFrameMs) / 1000);
+      lastFrameMs = nowMs;
+      const elapsedSec = (nowMs - gameStartMs) / 1000;
+
+      timerEl.textContent = elapsedSec.toFixed(1);
+      flashlightRadius = Math.max(150, 290 - elapsedSec * 1.3);
+
+      const spawnIntervalMs = Math.max(900, 2300 - elapsedSec * 18);
+      if (nowMs - lastSpawnMs >= spawnIntervalMs) {
+        lastSpawnMs = nowMs;
+        spawnMonster(elapsedSec);
+      }
+
+      ctx.fillStyle = '#88929a';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+
+      monsters = monsters.filter(monster => {
+        const dx = centerX - monster.x;
+        const dy = centerY - monster.y;
+        const distanceToCenter = Math.hypot(dx, dy) || 1;
+
+        monster.x += (dx / distanceToCenter) * monster.speed * dt;
+        monster.y += (dy / distanceToCenter) * monster.speed * dt;
+        monster.radius += monster.growthRate * dt;
+
+        const lightDist = Math.hypot(monster.x - cursorX, monster.y - cursorY);
+        if (lightDist < 90) {
+          monster.health -= 320 * dt;
+          monster.radius -= 36 * dt;
+        }
+
+        if (monster.health <= 0 || monster.radius <= 4) {
+          return false;
+        }
+
+        if (distanceToCenter < monster.radius + 14) {
+          setDeathState();
+          return false;
+        }
+
+        ctx.beginPath();
+        ctx.arc(monster.x, monster.y, monster.radius, 0, Math.PI * 2);
+        ctx.fillStyle = '#000';
+        ctx.fill();
+        return true;
+      });
+
+      updateFlashlight();
+      frameId = requestAnimationFrame(gameLoop);
+    };
+
+    const startGame = () => {
+      if (gameRunning) {
+        return;
+      }
+
+      setActiveState();
+      isDead = false;
+      monsters = [];
+      gameRunning = true;
+      gameStartMs = performance.now();
+      lastFrameMs = gameStartMs;
+      lastSpawnMs = gameStartMs;
+      flashlightRadius = 290;
+      timerEl.textContent = '0.0';
+      updateFlashlight();
+      frameId = requestAnimationFrame(gameLoop);
+    };
+
+    const resetToWaiting = () => {
+      phoneId = null;
+      lastAlpha = null;
+      isDead = false;
+      cursorX = window.innerWidth / 2;
+      cursorY = window.innerHeight * 0.75;
+      monsters = [];
+      if (frameId !== null) {
+        cancelAnimationFrame(frameId);
+        frameId = null;
+      }
+      gameRunning = false;
+      setWaitingState();
+    };
+
+    const createPeer = () => {
+      peer = new SimplePeer({ initiator: false, trickle: false });
+
+      peer.on('signal', data => {
+        if (phoneId) socket.emit('signal', phoneId, data);
+      });
+
+      peer.on('data', data => {
+        const msg = JSON.parse(data.toString());
+
+        if (msg.type === 'startGame') {
+          startGame();
+          return;
+        }
+
+        if (msg.type === 'restartGame') {
+          if (isDead) {
+            startGame();
+          }
+          return;
+        }
+
+        if (msg.type === 'gyro') {
+          if (lastAlpha !== null) {
+            let alphaDelta = msg.alpha - lastAlpha;
+            if (alphaDelta > 180) alphaDelta -= 360;
+            if (alphaDelta < -180) alphaDelta += 360;
+            cursorX -= alphaDelta * 20;
+          }
+          lastAlpha = msg.alpha;
+
+          const sensitivity = 3;
+          cursorY = (window.innerHeight * 0.75) - msg.beta * (window.innerHeight / 180) * sensitivity;
+          cursorX = Math.max(0, Math.min(window.innerWidth, cursorX));
+          cursorY = Math.max(0, Math.min(window.innerHeight, cursorY));
+          return;
+        }
+      });
+
+      peer.on('error', err => console.error('Peer error:', err));
+      peer.on('close', () => {
+        resetToWaiting();
+      });
+    };
 
     socket.on('connect', () => {
       console.log('Connected to server:', socket.id);
 
-      // Generate QR code for phone
       const mobileUrl = `${new URL(`/mobile.html?id=${socket.id}`, window.location)}`;
       $url.textContent = mobileUrl;
       $url.href = mobileUrl;
@@ -70,115 +359,30 @@
       const qr = qrcode(4, 'L');
       qr.addData(mobileUrl);
       qr.make();
-      const qrEl = document.getElementById('qr');
-      const waitingScreenEl = document.getElementById('waiting-screen');
       qrEl.innerHTML = qr.createImgTag(4);
 
-      const overlay = document.getElementById('overlay');
-      const setWaitingState = () => {
-        overlay.style.background = '';
-        document.body.style.backgroundColor = '#fff';
-        document.body.style.color = '#000';
-        waitingScreenEl.style.display = 'block';
-      };
-
-      const setActiveState = () => {
-        document.body.style.backgroundColor = '#222';
-        document.body.style.color = '#fff';
-        waitingScreenEl.style.display = 'none';
-      };
-
-      setWaitingState();
-
-      let phoneId = null;
-
-      // Receive messages from phone
-      let cursorX = window.innerWidth / 2;
-      let cursorY = window.innerHeight / 2;
-      let lastAlpha = null;
-
-      const moveFlashlight = () => {
-        overlay.style.background = `radial-gradient(circle 250px at ${cursorX}px ${cursorY}px, transparent 0%, transparent 40%, rgba(0,0,0,0.97) 100%)`;
-      };
-
-      let rafPending = false;
-      const scheduleFlashlight = () => {
-        if (!rafPending) {
-          rafPending = true;
-          requestAnimationFrame(() => {
-            moveFlashlight();
-            rafPending = false;
-          });
-        }
-      };
-
-      const resetToWaiting = () => {
-        phoneId = null;
-        lastAlpha = null;
-        cursorX = window.innerWidth / 2;
-        cursorY = window.innerHeight / 2;
-        setWaitingState();
-      };
-
-      const createPeer = () => {
-        peer = new SimplePeer({ initiator: false, trickle: false });
-
-        peer.on('signal', data => {
-          if (phoneId) socket.emit('signal', phoneId, data);
-        });
-
-        peer.on('data', data => {
-          const msg = JSON.parse(data.toString());
-          if (msg.type === 'gyro') {
-            if (lastAlpha !== null) {
-              let alphaDelta = msg.alpha - lastAlpha;
-              if (alphaDelta > 180) alphaDelta -= 360;
-              if (alphaDelta < -180) alphaDelta += 360;
-              cursorX -= alphaDelta * 20;
-            }
-            lastAlpha = msg.alpha;
-
-            const sensitivity = 3;
-            cursorY = (window.innerHeight * 0.75) - msg.beta * (window.innerHeight / 180) * sensitivity;
-            cursorX = Math.max(0, Math.min(window.innerWidth, cursorX));
-            cursorY = Math.max(0, Math.min(window.innerHeight, cursorY));
-            scheduleFlashlight();
-          } else if (msg.type === 'buttonClick') {
-            document.body.style.backgroundColor = `hsl(${Math.random() * 360}, 70%, 80%)`;
-          }
-        });
-
-        peer.on('error', err => console.error('Peer error:', err));
-        peer.on('connect', () => {
-          setActiveState();
-        });
-        peer.on('close', () => {
-          resetToWaiting();
-        });
-      };
-
+      resetToWaiting();
       createPeer();
+    });
 
-      // Handle incoming offer from the phone
-      socket.on('signal', ({ signal, from }) => {
-        if (!peer || peer.destroyed) {
-          createPeer();
-        }
-        phoneId = from;
-        peer.signal(signal);
-      });
+    socket.on('signal', ({ signal, from }) => {
+      if (!peer || peer.destroyed) {
+        createPeer();
+      }
+      phoneId = from;
+      peer.signal(signal);
+    });
 
-      socket.on('peer-disconnected', ({ id }) => {
-        if (id !== phoneId) {
-          return;
-        }
-        if (peer && !peer.destroyed) {
-          peer.destroy();
-        } else {
-          resetToWaiting();
-          createPeer();
-        }
-      });
+    socket.on('peer-disconnected', ({ id }) => {
+      if (id !== phoneId) {
+        return;
+      }
+      if (peer && !peer.destroyed) {
+        peer.destroy();
+      } else {
+        resetToWaiting();
+        createPeer();
+      }
     });
   </script>
 </body>
