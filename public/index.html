@@ -9,8 +9,8 @@
     body {
       margin: 0;
       overflow: hidden;
-      background: #fff;
-      color: #000;
+      background: #0b0d12;
+      color: #e9ecf1;
       font-family: Arial, sans-serif;
     }
 
@@ -22,19 +22,45 @@
       align-items: center;
       justify-content: center;
       text-align: center;
-      background: #fff;
+      background: #0b0d12;
       z-index: 5;
     }
 
     #title {
       margin: 0 0 16px;
       font-size: 2.2rem;
+      color: #f7f9ff;
+      text-shadow: 0 2px 14px rgba(0, 0, 0, 0.35);
     }
 
-    #url {
+    #intro {
+      max-width: 560px;
+      margin: 0 18px 14px;
+      line-height: 1.45;
+      font-size: 1.05rem;
+      color: #c4cbdb;
+    }
+
+    #enableSoundBtn {
+      margin-top: 12px;
+      padding: 10px 14px;
+      border: 2px solid #6f7a93;
+      background: #141925;
+      color: #eaf0ff;
+      font-weight: bold;
       display: inline-block;
-      margin-bottom: 12px;
-      color: inherit;
+      cursor: pointer;
+    }
+
+    #qr {
+      margin-top: 4px;
+    }
+
+    #qr img {
+      background: #fff;
+      padding: 8px;
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
     }
 
     #game-canvas {
@@ -81,14 +107,26 @@
       margin: 0 0 10px;
       font-size: 2.2rem;
     }
+
+    #jumpscare-screen {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 6;
+      background: #000 url('/assets/img/jumpscare.png') center center / cover no-repeat;
+    }
   </style>
 </head>
 
 <body>
   <div id="waiting-screen">
     <h1 id="title">Survive With the Light</h1>
-    <a id="url" href=""></a>
+    <p id="intro">Use your flashlight to shine away the monsters, try to survive for as long as possible. You'll surely
+      die.</p>
     <div id="qr"></div>
+    <button id="enableSoundBtn">ENABLE SOUND</button>
   </div>
 
   <canvas id="game-canvas"></canvas>
@@ -96,27 +134,104 @@
   <div id="overlay"></div>
   <div id="death-screen">
     <h2>You Died</h2>
+    <p>You survived <span id="death-time">0.0</span> seconds.</p>
     <p>Tap restart on your phone to try again.</p>
   </div>
+  <div id="jumpscare-screen"></div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 
   <script>
-    const $url = document.getElementById('url');
     const waitingScreenEl = document.getElementById('waiting-screen');
     const qrEl = document.getElementById('qr');
+    const enableSoundBtn = document.getElementById('enableSoundBtn');
     const canvas = document.getElementById('game-canvas');
     const ctx = canvas.getContext('2d');
     const overlayEl = document.getElementById('overlay');
     const deathScreenEl = document.getElementById('death-screen');
+    const deathTimeEl = document.getElementById('death-time');
+    const jumpscareEl = document.getElementById('jumpscare-screen');
     const hudEl = document.getElementById('hud');
     const timerEl = document.getElementById('timer');
 
     const socket = io();
     let peer;
     let phoneId = null;
+
+    const MONSTER_SPRITE_PATH = '/assets/img/spritesheet/monster__sheet.png';
+    const BACKGROUND_IMAGE_PATH = '/assets/img/background.png';
+    const JUMPSCARE_SOUND_PATH = '/assets/sound/jumpscare.mp3';
+    const MONSTER_SPRITE_COLUMNS = 8;
+    const MONSTER_SPRITE_ROWS = 8;
+    const MONSTER_SPRITE_FRAME_COUNT = 60;
+    const MONSTER_SPRITE_FPS = 30;
+
+    const FLASHLIGHT_MAX_RADIUS = 290;
+    const FLASHLIGHT_MIN_RADIUS = 150;
+    const FLASHLIGHT_DRAIN_PER_SECOND = 1.3;
+
+    const monsterSprite = new Image();
+    let monsterSpriteReady = false;
+    monsterSprite.onload = () => {
+      monsterSpriteReady = true;
+    };
+    monsterSprite.onerror = () => {
+      monsterSpriteReady = false;
+    };
+    monsterSprite.src = MONSTER_SPRITE_PATH;
+
+    const backgroundImage = new Image();
+    let backgroundImageReady = false;
+    backgroundImage.onload = () => {
+      backgroundImageReady = true;
+    };
+    backgroundImage.onerror = () => {
+      backgroundImageReady = false;
+    };
+    backgroundImage.src = BACKGROUND_IMAGE_PATH;
+
+    const jumpscareAudio = new Audio(JUMPSCARE_SOUND_PATH);
+    jumpscareAudio.preload = 'auto';
+    jumpscareAudio.volume = 1;
+    let jumpscareAudioUnlocked = false;
+
+    const unlockJumpscareAudio = () => {
+      if (jumpscareAudioUnlocked) {
+        enableSoundBtn.textContent = 'SOUND ENABLED';
+        return;
+      }
+      jumpscareAudio.muted = true;
+      jumpscareAudio.play()
+        .then(() => {
+          jumpscareAudio.pause();
+          jumpscareAudio.currentTime = 0;
+          jumpscareAudio.muted = false;
+          jumpscareAudioUnlocked = true;
+          enableSoundBtn.textContent = 'SOUND ENABLED';
+        })
+        .catch(() => {
+          enableSoundBtn.textContent = 'ENABLE SOUND';
+        });
+    };
+
+    window.addEventListener('pointerdown', unlockJumpscareAudio, { once: true });
+    window.addEventListener('keydown', unlockJumpscareAudio, { once: true });
+    enableSoundBtn.addEventListener('click', unlockJumpscareAudio);
+
+    const playJumpscareSound = () => {
+      if (!jumpscareAudioUnlocked) {
+        enableSoundBtn.textContent = 'ENABLE SOUND';
+      }
+      jumpscareAudio.currentTime = 0;
+      jumpscareAudio.play().catch(() => {
+        const fallbackAudio = new Audio(JUMPSCARE_SOUND_PATH);
+        fallbackAudio.volume = 1;
+        fallbackAudio.play().catch(() => {
+        });
+      });
+    };
 
     let cursorX = window.innerWidth / 2;
     let cursorY = window.innerHeight * 0.75;
@@ -129,7 +244,10 @@
     let lastFrameMs = 0;
     let lastSpawnMs = 0;
     let frameId = null;
-    let flashlightRadius = 260;
+    let flashlightRadius = FLASHLIGHT_MAX_RADIUS;
+    let lastBatterySentAt = 0;
+    let lastBatterySentLevel = -1;
+    let jumpscareTimeoutId = null;
 
     const resizeCanvas = () => {
       canvas.width = window.innerWidth;
@@ -143,14 +261,21 @@
 
     const setWaitingState = () => {
       isDead = false;
+      if (jumpscareTimeoutId !== null) {
+        clearTimeout(jumpscareTimeoutId);
+        jumpscareTimeoutId = null;
+      }
       waitingScreenEl.style.display = 'flex';
       canvas.style.display = 'none';
       overlayEl.style.display = 'none';
       overlayEl.style.background = '';
       hudEl.style.display = 'none';
       deathScreenEl.style.display = 'none';
-      document.body.style.backgroundColor = '#fff';
-      document.body.style.color = '#000';
+      jumpscareEl.style.display = 'none';
+      jumpscareAudio.pause();
+      jumpscareAudio.currentTime = 0;
+      document.body.style.backgroundColor = '#0b0d12';
+      document.body.style.color = '#e9ecf1';
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     };
 
@@ -160,11 +285,15 @@
       overlayEl.style.display = 'block';
       hudEl.style.display = 'block';
       deathScreenEl.style.display = 'none';
+      jumpscareEl.style.display = 'none';
       document.body.style.backgroundColor = '#111';
       document.body.style.color = '#fff';
     };
 
-    const setDeathState = () => {
+    const setDeathState = survivedSeconds => {
+      if (isDead) {
+        return;
+      }
       gameRunning = false;
       isDead = true;
       if (frameId !== null) {
@@ -173,14 +302,54 @@
       }
       overlayEl.style.display = 'none';
       hudEl.style.display = 'none';
-      deathScreenEl.style.display = 'flex';
+      deathTimeEl.textContent = survivedSeconds.toFixed(1);
+      jumpscareEl.style.display = 'flex';
+      deathScreenEl.style.display = 'none';
+
+      playJumpscareSound();
+
+      if (jumpscareTimeoutId !== null) {
+        clearTimeout(jumpscareTimeoutId);
+      }
+      jumpscareTimeoutId = setTimeout(() => {
+        jumpscareEl.style.display = 'none';
+        deathScreenEl.style.display = 'flex';
+      }, 1200);
+
       if (peer && peer.connected) {
         peer.send(JSON.stringify({ type: 'gameOver' }));
+        peer.send(JSON.stringify({ type: 'battery', level: 0 }));
       }
     };
 
-    const updateFlashlight = () => {
-      overlayEl.style.background = `radial-gradient(circle ${flashlightRadius}px at ${cursorX}px ${cursorY}px, transparent 0%, transparent 35%, rgba(0,0,0,0.97) 100%)`;
+    const sendBatteryLevel = (nowMs, force = false) => {
+      if (!peer || !peer.connected) {
+        return;
+      }
+
+      const ratio = (flashlightRadius - FLASHLIGHT_MIN_RADIUS) / (FLASHLIGHT_MAX_RADIUS - FLASHLIGHT_MIN_RADIUS);
+      const clampedRatio = Math.max(0, Math.min(1, ratio));
+      const level = Math.round(clampedRatio * 100);
+
+      if (!force) {
+        const sentRecently = nowMs - lastBatterySentAt < 120;
+        const tinyDelta = Math.abs(level - lastBatterySentLevel) < 1;
+        if (sentRecently && tinyDelta) {
+          return;
+        }
+      }
+
+      lastBatterySentAt = nowMs;
+      lastBatterySentLevel = level;
+      peer.send(JSON.stringify({ type: 'battery', level }));
+    };
+
+    const updateFlashlight = nowMs => {
+      const t = nowMs || performance.now();
+      const sineFlicker = Math.sin(t * 0.02) * 2.2;
+      const randomFlicker = (Math.random() - 0.5) * 1.6;
+      const renderRadius = Math.max(FLASHLIGHT_MIN_RADIUS, flashlightRadius + sineFlicker + randomFlicker);
+      overlayEl.style.background = `radial-gradient(circle ${renderRadius}px at ${cursorX}px ${cursorY}px, transparent 0%, transparent 35%, rgba(0,0,0,0.97) 100%)`;
     };
 
     const spawnMonster = elapsedSec => {
@@ -208,8 +377,37 @@
         radius: 12,
         health: 100,
         speed: 24 + elapsedSec * 0.55,
-        growthRate: 2.5 + elapsedSec * 0.04
+        growthRate: 2.5 + elapsedSec * 0.04,
+        frameOffset: Math.floor(Math.random() * MONSTER_SPRITE_FRAME_COUNT)
       });
+    };
+
+    const drawGameBackground = () => {
+      if (!backgroundImageReady) {
+        ctx.fillStyle = '#88929a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        return;
+      }
+
+      const imageAspect = backgroundImage.width / backgroundImage.height;
+      const canvasAspect = canvas.width / canvas.height;
+
+      let drawWidth = canvas.width;
+      let drawHeight = canvas.height;
+      let offsetX = 0;
+      let offsetY = 0;
+
+      if (imageAspect > canvasAspect) {
+        drawHeight = canvas.height;
+        drawWidth = drawHeight * imageAspect;
+        offsetX = (canvas.width - drawWidth) / 2;
+      } else {
+        drawWidth = canvas.width;
+        drawHeight = drawWidth / imageAspect;
+        offsetY = (canvas.height - drawHeight) / 2;
+      }
+
+      ctx.drawImage(backgroundImage, offsetX, offsetY, drawWidth, drawHeight);
     };
 
     const gameLoop = nowMs => {
@@ -222,7 +420,7 @@
       const elapsedSec = (nowMs - gameStartMs) / 1000;
 
       timerEl.textContent = elapsedSec.toFixed(1);
-      flashlightRadius = Math.max(150, 290 - elapsedSec * 1.3);
+      flashlightRadius = Math.max(FLASHLIGHT_MIN_RADIUS, FLASHLIGHT_MAX_RADIUS - elapsedSec * FLASHLIGHT_DRAIN_PER_SECOND);
 
       const spawnIntervalMs = Math.max(900, 2300 - elapsedSec * 18);
       if (nowMs - lastSpawnMs >= spawnIntervalMs) {
@@ -230,8 +428,7 @@
         spawnMonster(elapsedSec);
       }
 
-      ctx.fillStyle = '#88929a';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      drawGameBackground();
 
       const centerX = canvas.width / 2;
       const centerY = canvas.height / 2;
@@ -256,18 +453,60 @@
         }
 
         if (distanceToCenter < monster.radius + 14) {
-          setDeathState();
+          setDeathState(elapsedSec);
           return false;
         }
 
-        ctx.beginPath();
-        ctx.arc(monster.x, monster.y, monster.radius, 0, Math.PI * 2);
-        ctx.fillStyle = '#000';
-        ctx.fill();
+        if (monsterSpriteReady) {
+          const animFrame = Math.floor(elapsedSec * MONSTER_SPRITE_FPS + monster.frameOffset) % MONSTER_SPRITE_FRAME_COUNT;
+          const frameX = animFrame % MONSTER_SPRITE_COLUMNS;
+          const frameY = Math.floor(animFrame / MONSTER_SPRITE_COLUMNS);
+          const sourceWidth = monsterSprite.width / MONSTER_SPRITE_COLUMNS;
+          const sourceHeight = monsterSprite.height / MONSTER_SPRITE_ROWS;
+
+          const drawSize = monster.radius * 2.6;
+          const fromRightSide = monster.x < centerX;
+
+          if (fromRightSide) {
+            ctx.save();
+            ctx.translate(monster.x, monster.y);
+            ctx.scale(-1, 1);
+            ctx.drawImage(
+              monsterSprite,
+              frameX * sourceWidth,
+              frameY * sourceHeight,
+              sourceWidth,
+              sourceHeight,
+              -drawSize / 2,
+              -drawSize / 2,
+              drawSize,
+              drawSize
+            );
+            ctx.restore();
+          } else {
+            ctx.drawImage(
+              monsterSprite,
+              frameX * sourceWidth,
+              frameY * sourceHeight,
+              sourceWidth,
+              sourceHeight,
+              monster.x - drawSize / 2,
+              monster.y - drawSize / 2,
+              drawSize,
+              drawSize
+            );
+          }
+        } else {
+          ctx.beginPath();
+          ctx.arc(monster.x, monster.y, monster.radius, 0, Math.PI * 2);
+          ctx.fillStyle = '#000';
+          ctx.fill();
+        }
         return true;
       });
 
-      updateFlashlight();
+      updateFlashlight(nowMs);
+      sendBatteryLevel(nowMs);
       frameId = requestAnimationFrame(gameLoop);
     };
 
@@ -283,9 +522,12 @@
       gameStartMs = performance.now();
       lastFrameMs = gameStartMs;
       lastSpawnMs = gameStartMs;
-      flashlightRadius = 290;
+      flashlightRadius = FLASHLIGHT_MAX_RADIUS;
+      lastBatterySentAt = 0;
+      lastBatterySentLevel = -1;
       timerEl.textContent = '0.0';
-      updateFlashlight();
+      updateFlashlight(gameStartMs);
+      sendBatteryLevel(gameStartMs, true);
       frameId = requestAnimationFrame(gameLoop);
     };
 
@@ -301,6 +543,9 @@
         frameId = null;
       }
       gameRunning = false;
+      flashlightRadius = FLASHLIGHT_MAX_RADIUS;
+      lastBatterySentAt = 0;
+      lastBatterySentLevel = -1;
       setWaitingState();
     };
 
@@ -353,8 +598,6 @@
       console.log('Connected to server:', socket.id);
 
       const mobileUrl = `${new URL(`/mobile.html?id=${socket.id}`, window.location)}`;
-      $url.textContent = mobileUrl;
-      $url.href = mobileUrl;
 
       const qr = qrcode(4, 'L');
       qr.addData(mobileUrl);
