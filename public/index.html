@@ -5,12 +5,50 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Laptop P2P Button Logger</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #fff;
+      color: #000;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: Arial, sans-serif;
+    }
+
+    #waiting-screen {
+      text-align: center;
+      z-index: 1;
+    }
+
+    #title {
+      margin: 0 0 16px;
+      font-size: 2rem;
+    }
+
+    #url {
+      display: inline-block;
+      margin-bottom: 12px;
+      color: inherit;
+    }
+
+    #overlay {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+    }
+  </style>
 </head>
 
 <body>
-  <h2>Laptop</h2>
-  <a id="url" href=""></a>
-  <div id="qr"></div>
+  <div id="waiting-screen">
+    <h1 id="title">Survive With the Light</h1>
+    <a id="url" href=""></a>
+    <div id="qr"></div>
+  </div>
+  <div id="overlay"></div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
@@ -32,28 +70,114 @@
       const qr = qrcode(4, 'L');
       qr.addData(mobileUrl);
       qr.make();
-      document.getElementById('qr').innerHTML = qr.createImgTag(4);
+      const qrEl = document.getElementById('qr');
+      const waitingScreenEl = document.getElementById('waiting-screen');
+      qrEl.innerHTML = qr.createImgTag(4);
 
-      // Wait until a phone connects before creating initiator peer
-      socket.on('phone-ready', phoneId => {
-        console.log('Phone ready:', phoneId);
-        peer = new SimplePeer({ initiator: true, trickle: false });
+      const overlay = document.getElementById('overlay');
+      const setWaitingState = () => {
+        overlay.style.background = '';
+        document.body.style.backgroundColor = '#fff';
+        document.body.style.color = '#000';
+        waitingScreenEl.style.display = 'block';
+      };
 
-        // Send signaling data to phone
-        peer.on('signal', data => socket.emit('signal', phoneId, data));
+      const setActiveState = () => {
+        document.body.style.backgroundColor = '#222';
+        document.body.style.color = '#fff';
+        waitingScreenEl.style.display = 'none';
+      };
 
-        // Receive messages from phone
+      setWaitingState();
+
+      let phoneId = null;
+
+      // Receive messages from phone
+      let cursorX = window.innerWidth / 2;
+      let cursorY = window.innerHeight / 2;
+      let lastAlpha = null;
+
+      const moveFlashlight = () => {
+        overlay.style.background = `radial-gradient(circle 250px at ${cursorX}px ${cursorY}px, transparent 0%, transparent 40%, rgba(0,0,0,0.97) 100%)`;
+      };
+
+      let rafPending = false;
+      const scheduleFlashlight = () => {
+        if (!rafPending) {
+          rafPending = true;
+          requestAnimationFrame(() => {
+            moveFlashlight();
+            rafPending = false;
+          });
+        }
+      };
+
+      const resetToWaiting = () => {
+        phoneId = null;
+        lastAlpha = null;
+        cursorX = window.innerWidth / 2;
+        cursorY = window.innerHeight / 2;
+        setWaitingState();
+      };
+
+      const createPeer = () => {
+        peer = new SimplePeer({ initiator: false, trickle: false });
+
+        peer.on('signal', data => {
+          if (phoneId) socket.emit('signal', phoneId, data);
+        });
+
         peer.on('data', data => {
           const msg = JSON.parse(data.toString());
-          if (msg.type === 'buttonClick') {
-            console.log('Phone button clicked!', msg);
+          if (msg.type === 'gyro') {
+            if (lastAlpha !== null) {
+              let alphaDelta = msg.alpha - lastAlpha;
+              if (alphaDelta > 180) alphaDelta -= 360;
+              if (alphaDelta < -180) alphaDelta += 360;
+              cursorX -= alphaDelta * 20;
+            }
+            lastAlpha = msg.alpha;
+
+            const sensitivity = 3;
+            cursorY = (window.innerHeight * 0.75) - msg.beta * (window.innerHeight / 180) * sensitivity;
+            cursorX = Math.max(0, Math.min(window.innerWidth, cursorX));
+            cursorY = Math.max(0, Math.min(window.innerHeight, cursorY));
+            scheduleFlashlight();
+          } else if (msg.type === 'buttonClick') {
+            document.body.style.backgroundColor = `hsl(${Math.random() * 360}, 70%, 80%)`;
           }
         });
 
-        // Handle signaling from phone
-        socket.on('signal', ({ signal, from }) => {
-          if (from === phoneId) peer.signal(signal);
+        peer.on('error', err => console.error('Peer error:', err));
+        peer.on('connect', () => {
+          setActiveState();
         });
+        peer.on('close', () => {
+          resetToWaiting();
+        });
+      };
+
+      createPeer();
+
+      // Handle incoming offer from the phone
+      socket.on('signal', ({ signal, from }) => {
+        if (!peer || peer.destroyed) {
+          createPeer();
+        }
+        phoneId = from;
+        peer.signal(signal);
+      });
+
+      socket.on('peer-disconnected', ({ id }) => {
+        if (id !== phoneId) {
+          return;
+        }
+        if (peer && !peer.destroyed) {
+          peer.destroy();
+        } else {
+          resetToWaiting();
+          createPeer();
+        }
       });
     });
   </script>

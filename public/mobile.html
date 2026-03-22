@@ -9,7 +9,9 @@
 
 <body>
   <h2>Phone</h2>
-  <button id="sendBtn">Click Me</button>
+  <button id="startBtn">Start Gyro</button>
+  <button id="sendBtn" disabled>Click Me</button>
+  <p id="status">Waiting for P2P connection...</p>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
@@ -23,11 +25,7 @@
     socket.on('connect', () => {
       console.log('Phone connected, Socket ID:', socket.id);
 
-      // Let laptop know this phone is ready
-      socket.emit('phone-ready', laptopId);
-
-      // Create non-initiator peer
-      peer = new SimplePeer({ initiator: false, trickle: false });
+      peer = new SimplePeer({ initiator: true, trickle: false });
 
       peer.on('signal', data => {
         socket.emit('signal', laptopId, data);
@@ -39,10 +37,40 @@
 
       peer.on('connect', () => {
         console.log('P2P connected to laptop');
-        document.getElementById('sendBtn').addEventListener('click', () => {
+        document.getElementById('status').textContent = 'Connected! Tap Start Gyro.';
+        const btn = document.getElementById('sendBtn');
+        btn.disabled = false;
+        btn.addEventListener('click', () => {
           peer.send(JSON.stringify({ type: 'buttonClick' }));
           console.log('Sent buttonClick to laptop');
         });
+
+        document.getElementById('startBtn').addEventListener('click', () => {
+          if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+            DeviceMotionEvent.requestPermission().then(permission => {
+              if (permission !== 'granted') {
+                alert('Gyro permission denied.');
+                return;
+              }
+              startGyro();
+            }).catch(err => console.error('Permission error:', err));
+          } else {
+            startGyro();
+          }
+        });
+
+        const startGyro = () => {
+          document.getElementById('status').textContent = 'Gyro active!';
+          window.addEventListener('deviceorientation', e => {
+            if (peer && peer.connected) {
+              peer.send(JSON.stringify({
+                type: 'gyro',
+                beta: e.beta,  
+                alpha: e.alpha 
+              }));
+            }
+          });
+        };
       });
 
       peer.on('error', err => console.error('Peer error:', err));
