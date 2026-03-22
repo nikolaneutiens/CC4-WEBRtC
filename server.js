@@ -11,19 +11,31 @@ const server = https.createServer({
 }, app);
 const io = new Server(server);
 const port = process.env.PORT || 3000;
+const socketPeerMap = new Map();
 
 app.use(express.static('public'));
 
 io.on('connection', socket => {
   console.log('Socket connected:', socket.id);
 
-  // Forward signaling messages
   socket.on('signal', (targetId, signal) => {
     const target = io.sockets.sockets.get(targetId);
-    if (target) target.emit('signal', { signal, from: socket.id });
+    if (target) {
+      target.emit('signal', { signal, from: socket.id });
+      socketPeerMap.set(socket.id, targetId);
+      socketPeerMap.set(targetId, socket.id);
+    }
   });
 
   socket.on('disconnect', () => {
+    const peerId = socketPeerMap.get(socket.id);
+    if (peerId) {
+      io.to(peerId).emit('peer-disconnected', { id: socket.id });
+      if (socketPeerMap.get(peerId) === socket.id) {
+        socketPeerMap.delete(peerId);
+      }
+      socketPeerMap.delete(socket.id);
+    }
     console.log('Socket disconnected:', socket.id);
   });
 });

@@ -25,7 +25,6 @@
     socket.on('connect', () => {
       console.log('Phone connected, Socket ID:', socket.id);
 
-      // Create initiator peer - phone starts the handshake
       peer = new SimplePeer({ initiator: true, trickle: false });
 
       peer.on('signal', data => {
@@ -46,10 +45,8 @@
           console.log('Sent buttonClick to laptop');
         });
 
-        // iOS requires permission to be requested synchronously in a click handler
         document.getElementById('startBtn').addEventListener('click', () => {
           if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-            // iOS 13+ - must be called synchronously, no await
             DeviceMotionEvent.requestPermission().then(permission => {
               if (permission !== 'granted') {
                 alert('Gyro permission denied.');
@@ -58,7 +55,6 @@
               startGyro();
             }).catch(err => console.error('Permission error:', err));
           } else {
-            // Non-iOS, permission not needed
             startGyro();
           }
         });
@@ -69,8 +65,8 @@
             if (peer && peer.connected) {
               peer.send(JSON.stringify({
                 type: 'gyro',
-                beta: e.beta,   // up/down tilt
-                alpha: e.alpha  // compass heading for left/right
+                beta: e.beta,  
+                alpha: e.alpha 
               }));
             }
           });

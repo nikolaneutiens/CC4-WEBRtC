@@ -9,22 +9,45 @@
     body {
       margin: 0;
       overflow: hidden;
-      color: white;
+      background: #fff;
+      color: #000;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: Arial, sans-serif;
+    }
+
+    #waiting-screen {
+      text-align: center;
+      z-index: 1;
+    }
+
+    #title {
+      margin: 0 0 16px;
+      font-size: 2rem;
+    }
+
+    #url {
+      display: inline-block;
+      margin-bottom: 12px;
+      color: inherit;
     }
 
     #overlay {
       position: fixed;
       inset: 0;
       pointer-events: none;
-      transition: background 0.05s;
     }
   </style>
 </head>
 
 <body>
-  <h2>Laptop</h2>
-  <a id="url" href=""></a>
-  <div id="qr"></div>
+  <div id="waiting-screen">
+    <h1 id="title">Survive With the Light</h1>
+    <a id="url" href=""></a>
+    <div id="qr"></div>
+  </div>
   <div id="overlay"></div>
 
   <script src="/socket.io/socket.io.js"></script>
@@ -47,62 +70,114 @@
       const qr = qrcode(4, 'L');
       qr.addData(mobileUrl);
       qr.make();
-      document.getElementById('qr').innerHTML = qr.createImgTag(4);
+      const qrEl = document.getElementById('qr');
+      const waitingScreenEl = document.getElementById('waiting-screen');
+      qrEl.innerHTML = qr.createImgTag(4);
 
-      // Create non-initiator peer - waits for phone to start the handshake
+      const overlay = document.getElementById('overlay');
+      const setWaitingState = () => {
+        overlay.style.background = '';
+        document.body.style.backgroundColor = '#fff';
+        document.body.style.color = '#000';
+        waitingScreenEl.style.display = 'block';
+      };
+
+      const setActiveState = () => {
+        document.body.style.backgroundColor = '#222';
+        document.body.style.color = '#fff';
+        waitingScreenEl.style.display = 'none';
+      };
+
+      setWaitingState();
+
       let phoneId = null;
-      peer = new SimplePeer({ initiator: false, trickle: false });
-
-      // Registered ONCE - sends answer back to phone
-      peer.on('signal', data => {
-        if (phoneId) socket.emit('signal', phoneId, data);
-      });
 
       // Receive messages from phone
-      const overlay = document.getElementById('overlay');
       let cursorX = window.innerWidth / 2;
       let cursorY = window.innerHeight / 2;
       let lastAlpha = null;
 
       const moveFlashlight = () => {
-        document.body.style.background = '#222';
         overlay.style.background = `radial-gradient(circle 250px at ${cursorX}px ${cursorY}px, transparent 0%, transparent 40%, rgba(0,0,0,0.97) 100%)`;
       };
-      moveFlashlight();
 
-      peer.on('data', data => {
-        const msg = JSON.parse(data.toString());
-        if (msg.type === 'gyro') {
-          // Calculate alpha delta to drift incrementally left/right
-          if (lastAlpha !== null) {
-            let alphaDelta = msg.alpha - lastAlpha;
-            // Handle compass wrap-around (e.g. 359 -> 1)
-            if (alphaDelta > 180) alphaDelta -= 360;
-            if (alphaDelta < -180) alphaDelta += 360;
-            cursorX -= alphaDelta * 20;
-          }
-          lastAlpha = msg.alpha;
-
-          // beta ranges roughly from -90 (tilted up) to 90 (tilted down)
-          // Map it directly to screen height so position is absolute like a Wii remote
-          // beta=0 (flat) = 3/4 down the screen
-          const sensitivity = 3;
-          cursorY = (window.innerHeight * 0.75) - msg.beta * (window.innerHeight / 180) * sensitivity;
-          // Clamp to screen bounds
-          cursorX = Math.max(0, Math.min(window.innerWidth, cursorX));
-          cursorY = Math.max(0, Math.min(window.innerHeight, cursorY));
-          moveFlashlight();
-        } else if (msg.type === 'buttonClick') {
-          document.body.style.backgroundColor = `hsl(${Math.random() * 360}, 70%, 80%)`;
+      let rafPending = false;
+      const scheduleFlashlight = () => {
+        if (!rafPending) {
+          rafPending = true;
+          requestAnimationFrame(() => {
+            moveFlashlight();
+            rafPending = false;
+          });
         }
-      });
+      };
 
-      peer.on('error', err => console.error('Peer error:', err));
+      const resetToWaiting = () => {
+        phoneId = null;
+        lastAlpha = null;
+        cursorX = window.innerWidth / 2;
+        cursorY = window.innerHeight / 2;
+        setWaitingState();
+      };
+
+      const createPeer = () => {
+        peer = new SimplePeer({ initiator: false, trickle: false });
+
+        peer.on('signal', data => {
+          if (phoneId) socket.emit('signal', phoneId, data);
+        });
+
+        peer.on('data', data => {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === 'gyro') {
+            if (lastAlpha !== null) {
+              let alphaDelta = msg.alpha - lastAlpha;
+              if (alphaDelta > 180) alphaDelta -= 360;
+              if (alphaDelta < -180) alphaDelta += 360;
+              cursorX -= alphaDelta * 20;
+            }
+            lastAlpha = msg.alpha;
+
+            const sensitivity = 3;
+            cursorY = (window.innerHeight * 0.75) - msg.beta * (window.innerHeight / 180) * sensitivity;
+            cursorX = Math.max(0, Math.min(window.innerWidth, cursorX));
+            cursorY = Math.max(0, Math.min(window.innerHeight, cursorY));
+            scheduleFlashlight();
+          } else if (msg.type === 'buttonClick') {
+            document.body.style.backgroundColor = `hsl(${Math.random() * 360}, 70%, 80%)`;
+          }
+        });
+
+        peer.on('error', err => console.error('Peer error:', err));
+        peer.on('connect', () => {
+          setActiveState();
+        });
+        peer.on('close', () => {
+          resetToWaiting();
+        });
+      };
+
+      createPeer();
 
       // Handle incoming offer from the phone
       socket.on('signal', ({ signal, from }) => {
+        if (!peer || peer.destroyed) {
+          createPeer();
+        }
         phoneId = from;
         peer.signal(signal);
+      });
+
+      socket.on('peer-disconnected', ({ id }) => {
+        if (id !== phoneId) {
+          return;
+        }
+        if (peer && !peer.destroyed) {
+          peer.destroy();
+        } else {
+          resetToWaiting();
+          createPeer();
+        }
       });
     });
   </script>

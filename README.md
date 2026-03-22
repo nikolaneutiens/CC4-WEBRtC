@@ -790,4 +790,7 @@ Unhandled Promise Rejection: Error: cannot signal after peer is destroyed
 
 After some troubleshooting I found that I was on a WIFI network that blocks p2p connections, making it an invisible enemy while bashing my head against the wall.
 
+
 Now we're trying to implement the gyro features, the big issue right now is that gyro functionality only works after clicking a button to grant permissions and a HTTPS connection. The button to grant permissions works but now the issue establishing the HTTPS server since I'm currently using a HTTP connection which will never work.
+
+The HTTPS issue has been fixed. 
